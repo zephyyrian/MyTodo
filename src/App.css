@@ -364,6 +364,18 @@ body {
   color: var(--calendar-day-selected-text);
 }
 
+.calendar-day.in-range {
+  background: color-mix(in srgb, var(--calendar-day-selected-bg) 18%, var(--secondary-bg));
+  border-color: color-mix(in srgb, var(--calendar-day-selected-border) 35%, var(--calendar-day-border));
+}
+
+.calendar-day.range-start,
+.calendar-day.range-end {
+  background: var(--calendar-day-selected-bg);
+  border-color: var(--calendar-day-selected-border);
+  color: var(--calendar-day-selected-text);
+}
+
 .calendar-day.today {
   box-shadow: inset 0 0 0 1px var(--calendar-day-today-ring);
 }

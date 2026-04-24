@@ -37,6 +37,11 @@ type ConfirmState = {
   confirmText: string;
 };
 
+type DateRange = {
+  start: string;
+  end: string;
+};
+
 type DragChildState = {
   parentId: string;
   childId: string;
@@ -78,7 +83,7 @@ function App() {
   });
   const [todos, setTodos] = useState<Todo[]>([]);
   const [currentFilter, setCurrentFilter] = useState<FilterType>("active");
-  const [selectedDate, setSelectedDate] = useState("");
+  const [dateRange, setDateRange] = useState<DateRange>({ start: "", end: "" });
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [calendarViewDate, setCalendarViewDate] = useState(new Date());
   const [titleInput, setTitleInput] = useState("");
@@ -184,10 +189,10 @@ function App() {
       const status = getTodoStatus(todo);
       if (currentFilter === "completed" && status !== "completed" && !exitingTodoIds.has(todo.id)) return false;
       if (currentFilter === "active" && status === "completed" && !exitingTodoIds.has(todo.id)) return false;
-      if (selectedDate && toDateKey(new Date(todo.createdAt)) !== selectedDate) return false;
+      if (!matchesDateRange(todo.createdAt, dateRange)) return false;
       return true;
     });
-  }, [currentFilter, selectedDate, todos, exitingTodoIds]);
+  }, [currentFilter, dateRange, todos, exitingTodoIds]);
 
   const leftCount = useMemo(
     () => todos.filter((todo) => getTodoStatus(todo) !== "completed").length,
@@ -230,7 +235,7 @@ function App() {
   const monthLabel = `${calendarViewDate.getFullYear()}年${String(
     calendarViewDate.getMonth() + 1
   ).padStart(2, "0")}月`;
-  const calendarDays = buildCalendarDays(calendarViewDate, selectedDate);
+  const calendarDays = buildCalendarDays(calendarViewDate, dateRange);
 
   async function initialize() {
     const loaded = await loadTodos();
@@ -644,7 +649,7 @@ function App() {
                   <span className="date-picker-icon" aria-hidden="true">
                     DATE
                   </span>
-                  <span>{selectedDate ? selectedDate.split("-").join("/") : "选择日期"}</span>
+                  <span>{getDateRangeLabel(dateRange)}</span>
                 </button>
 
                 {calendarOpen && (
@@ -693,10 +698,17 @@ function App() {
                           <button
                             key={day.dateKey}
                             type="button"
-                            className={`calendar-day ${day.selected ? "selected" : ""} ${day.today ? "today" : ""}`}
+                            className={`calendar-day ${day.selected ? "selected" : ""} ${
+                              day.today ? "today" : ""
+                            } ${day.rangeStart ? "range-start" : ""} ${day.rangeEnd ? "range-end" : ""} ${
+                              day.inRange ? "in-range" : ""
+                            }`}
                             onClick={() => {
-                              setSelectedDate(day.dateKey);
-                              setCalendarOpen(false);
+                              const nextRange = getNextDateRange(dateRange, day.dateKey);
+                              setDateRange(nextRange);
+                              if (nextRange.start && nextRange.end) {
+                                setCalendarOpen(false);
+                              }
                             }}
                           >
                             {day.day}
@@ -710,7 +722,8 @@ function App() {
                         className="secondary-btn"
                         onClick={() => {
                           const today = new Date();
-                          setSelectedDate(toDateKey(today));
+                          const dateKey = toDateKey(today);
+                          setDateRange({ start: dateKey, end: dateKey });
                           setCalendarViewDate(new Date(today.getFullYear(), today.getMonth(), 1));
                           setCalendarOpen(false);
                         }}
@@ -724,7 +737,7 @@ function App() {
                   </div>
                 )}
               </div>
-              <button type="button" className="secondary-btn" onClick={() => setSelectedDate("")}>
+              <button type="button" className="secondary-btn" onClick={() => setDateRange({ start: "", end: "" })}>
                 清空日期
               </button>
             </div>
@@ -1142,7 +1155,33 @@ function toDateKey(date: Date) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function buildCalendarDays(viewDate: Date, selectedDate: string) {
+function matchesDateRange(timestamp: number, dateRange: DateRange) {
+  if (!dateRange.start) return true;
+  const current = toDateKey(new Date(timestamp));
+  if (!dateRange.end) return current === dateRange.start;
+  return current >= dateRange.start && current <= dateRange.end;
+}
+
+function getDateRangeLabel(dateRange: DateRange) {
+  if (!dateRange.start) return "选择日期范围";
+  if (!dateRange.end) return `${dateRange.start.split("-").join("/")} - 结束日期`;
+  return `${dateRange.start.split("-").join("/")} - ${dateRange.end.split("-").join("/")}`;
+}
+
+function getNextDateRange(currentRange: DateRange, clickedDate: string): DateRange {
+  if (!currentRange.start || currentRange.end) {
+    return { start: clickedDate, end: "" };
+  }
+  if (clickedDate < currentRange.start) {
+    return { start: clickedDate, end: currentRange.start };
+  }
+  if (clickedDate === currentRange.start) {
+    return { start: clickedDate, end: clickedDate };
+  }
+  return { start: currentRange.start, end: clickedDate };
+}
+
+function buildCalendarDays(viewDate: Date, dateRange: DateRange) {
   const year = viewDate.getFullYear();
   const month = viewDate.getMonth();
   const firstDay = new Date(year, month, 1).getDay();
@@ -1154,17 +1193,25 @@ function buildCalendarDays(viewDate: Date, selectedDate: string) {
         dateKey: string;
         selected: boolean;
         today: boolean;
+        rangeStart: boolean;
+        rangeEnd: boolean;
+        inRange: boolean;
       }
   > = [];
 
   for (let i = 0; i < firstDay; i += 1) days.push(null);
   for (let day = 1; day <= daysInMonth; day += 1) {
     const dateKey = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const hasOpenSingle = Boolean(dateRange.start && !dateRange.end && dateKey === dateRange.start);
+    const isInRange = Boolean(dateRange.start && dateRange.end && dateKey > dateRange.start && dateKey < dateRange.end);
     days.push({
       day,
       dateKey,
-      selected: dateKey === selectedDate,
+      selected: hasOpenSingle || dateKey === dateRange.start || dateKey === dateRange.end,
       today: dateKey === toDateKey(new Date()),
+      rangeStart: dateKey === dateRange.start,
+      rangeEnd: dateKey === dateRange.end,
+      inRange: isInRange,
     });
   }
 
