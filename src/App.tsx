@@ -18,6 +18,7 @@ type ChildTodo = {
   description: string;
   completed: boolean;
   createdAt: number;
+  completedAt: number | null;
 };
 
 type Todo = {
@@ -26,6 +27,7 @@ type Todo = {
   description: string;
   completed: boolean;
   createdAt: number;
+  completedAt: number | null;
   collapsed: boolean;
   children: ChildTodo[];
 };
@@ -189,7 +191,8 @@ function App() {
       const status = getTodoStatus(todo);
       if (currentFilter === "completed" && status !== "completed" && !exitingTodoIds.has(todo.id)) return false;
       if (currentFilter === "active" && status === "completed" && !exitingTodoIds.has(todo.id)) return false;
-      if (!matchesDateRange(todo.createdAt, dateRange)) return false;
+      const filterTimestamp = currentFilter === "completed" ? todo.completedAt : todo.createdAt;
+      if (!matchesDateRange(filterTimestamp, dateRange)) return false;
       return true;
     });
   }, [currentFilter, dateRange, todos, exitingTodoIds]);
@@ -273,13 +276,24 @@ function App() {
       prev.map((todo) => {
         if (todo.id !== todoId) return todo;
         if (todo.children.length === 0) {
-          return { ...todo, completed: !todo.completed };
+          const nextCompleted = !todo.completed;
+          return {
+            ...todo,
+            completed: nextCompleted,
+            completedAt: nextCompleted ? Date.now() : null,
+          };
         }
         const allDone = todo.children.every((child) => child.completed);
         const next = !allDone;
+        const completedAt = next ? Date.now() : null;
         return {
           ...todo,
-          children: todo.children.map((child) => ({ ...child, completed: next })),
+          completedAt,
+          children: todo.children.map((child) => ({
+            ...child,
+            completed: next,
+            completedAt: next ? child.completedAt ?? completedAt : null,
+          })),
         };
       })
     );
@@ -297,12 +311,24 @@ function App() {
       prev.map((todo) =>
         todo.id !== parentId
           ? todo
-          : {
-              ...todo,
-              children: todo.children.map((child) =>
-                child.id === childId ? { ...child, completed: !child.completed } : child
-              ),
-            }
+          : (() => {
+              const toggledAt = Date.now();
+              const nextChildren = todo.children.map((child) =>
+                child.id === childId
+                  ? {
+                      ...child,
+                      completed: !child.completed,
+                      completedAt: child.completed ? null : toggledAt,
+                    }
+                  : child
+              );
+              const allCompleted = nextChildren.length > 0 && nextChildren.every((child) => child.completed);
+              return {
+                ...todo,
+                completedAt: allCompleted ? toggledAt : null,
+                children: nextChildren,
+              };
+            })()
       )
     );
   }
@@ -371,6 +397,7 @@ function App() {
       description,
       completed: false,
       createdAt: Date.now(),
+      completedAt: null,
     };
 
     await commitTodos((prev) =>
@@ -794,6 +821,7 @@ function App() {
                     <span className="todo-title">{todo.text}</span>
                   </div>
                   <p className="todo-time">创建于 {formatTime(todo.createdAt)}</p>
+                  {todo.completedAt && <p className="todo-time">完成于 {formatTime(todo.completedAt)}</p>}
                   {todo.collapsed && todo.children.length > 0 && (
                     <p className="collapsed-meta">
                       子任务 {todo.children.filter((child) => child.completed).length}/{todo.children.length}
@@ -898,6 +926,9 @@ function App() {
                             <div className="subtodo-content">
                               <span className="todo-title">{child.text}</span>
                               <p className="todo-time">创建于 {formatTime(child.createdAt)}</p>
+                              {child.completedAt && (
+                                <p className="todo-time">完成于 {formatTime(child.completedAt)}</p>
+                              )}
                               <p className={`todo-desc ${child.description ? "" : "empty"}`}>
                                 {child.description || "暂无描述"}
                               </p>
@@ -1019,6 +1050,7 @@ function App() {
       description,
       completed: false,
       createdAt: Date.now(),
+      completedAt: null,
       collapsed: false,
       children: [],
     };
@@ -1074,8 +1106,18 @@ function App() {
             description: typeof child.description === "string" ? child.description : "",
             completed: Boolean(child.completed),
             createdAt: typeof child.createdAt === "number" ? child.createdAt : Date.now(),
+            completedAt:
+              typeof child.completedAt === "number"
+                ? child.completedAt
+                : child.completed
+                  ? typeof child.createdAt === "number"
+                    ? child.createdAt
+                    : Date.now()
+                  : null,
           }))
         : [];
+
+      const completedAt = getNormalizedCompletedAt(todo, normalizedChildren);
 
       return {
         id: todo.id ?? crypto.randomUUID(),
@@ -1083,6 +1125,7 @@ function App() {
         description: typeof todo.description === "string" ? todo.description : "",
         completed: Boolean(todo.completed),
         createdAt: typeof todo.createdAt === "number" ? todo.createdAt : Date.now(),
+        completedAt,
         collapsed: Boolean(todo.collapsed),
         children: normalizedChildren,
       };
@@ -1155,11 +1198,33 @@ function toDateKey(date: Date) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function matchesDateRange(timestamp: number, dateRange: DateRange) {
+function matchesDateRange(timestamp: number | null, dateRange: DateRange) {
   if (!dateRange.start) return true;
+  if (timestamp === null) return false;
   const current = toDateKey(new Date(timestamp));
   if (!dateRange.end) return current === dateRange.start;
   return current >= dateRange.start && current <= dateRange.end;
+}
+
+function getNormalizedCompletedAt(todo: Todo, children: ChildTodo[]) {
+  if (children.length === 0) {
+    if (!todo.completed) return null;
+    if (typeof todo.completedAt === "number") return todo.completedAt;
+    return typeof todo.createdAt === "number" ? todo.createdAt : Date.now();
+  }
+
+  const allCompleted = children.every((child) => child.completed);
+  if (!allCompleted) return null;
+  if (typeof todo.completedAt === "number") return todo.completedAt;
+
+  const childCompletedTimes = children
+    .map((child) => child.completedAt)
+    .filter((value): value is number => typeof value === "number");
+  if (childCompletedTimes.length > 0) {
+    return Math.max(...childCompletedTimes);
+  }
+
+  return typeof todo.createdAt === "number" ? todo.createdAt : Date.now();
 }
 
 function getDateRangeLabel(dateRange: DateRange) {
